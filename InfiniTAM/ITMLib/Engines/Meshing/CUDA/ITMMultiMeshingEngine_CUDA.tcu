@@ -86,8 +86,46 @@ void ITMMultiMeshingEngine_CUDA<TVoxel, ITMVoxelBlockHash>::MeshScene(ITMMesh *m
 		dim3 cudaBlockSize(SDF_BLOCK_SIZE, SDF_BLOCK_SIZE, SDF_BLOCK_SIZE);
 		dim3 gridSize(SDF_LOCAL_BLOCK_NUM / 16, 16, numLocalMaps);
 
+		size_t n = gridSize.x * cudaBlockSize.x * gridSize.y * cudaBlockSize.y;
+		size_t n_size_clock_t = n * sizeof (clock_t);
+		size_t n_size_int = n * sizeof (int);
+
+		clock_t* sysnet_clocks_host = new clock_t[n];
+		clock_t* sysnet_clocks_device;
+
+		cudaMalloc((void**)&sysnet_clocks_device, n_size_clock_t);
+		cudaMemset(sysnet_clocks_device, 0, n_size_clock_t);
+
+		int* sysnet_calls_host = new int[n];
+		int* sysnet_calls_device;
+
+		cudaMalloc((void**)&sysnet_calls_device, n_size_int);
+		cudaMemset(sysnet_calls_device, 0, n_size_int);
+
 		meshScene_device<VD, typename ID::IndexData> << <gridSize, cudaBlockSize >> >(triangles, noTriangles_device, factor, noTotalEntries, noMaxTriangles,
-			visibleBlockGlobalPos_device, voxelData_device, indexData_device);
+			visibleBlockGlobalPos_device, voxelData_device, indexData_device, sysnet_calls_device, sysnet_clocks_device);
+
+		cudaMemcpy(sysnet_clocks_host, sysnet_clocks_device, n_size_clock_t, cudaMemcpyDeviceToHost);
+		cudaFree(sysnet_clocks_device);
+
+		cudaMemcpy(sysnet_calls_host, sysnet_calls_device, n_size_int, cudaMemcpyDeviceToHost);
+		cudaFree(sysnet_calls_device);
+
+		for (size_t i = 1; i < n; i++)
+			sysnet_clocks_host[0] += sysnet_clocks_host[i];
+
+		for (size_t i = 1; i < n; i++)
+			sysnet_calls_host[0] += sysnet_calls_host[i];
+
+		*sysnet_clocks_host /= n;
+		*sysnet_calls_host /= n;
+
+		::std::cout << "--> meshScene_device [calls:" << *sysnet_calls_host
+								<< ", clocks:" << *sysnet_clocks_host << "]\n";
+
+		delete[] sysnet_calls_host;
+		delete[] sysnet_clocks_host;
+
 		ORcudaKernelCheck;
 
 		ORcudaSafeCall(cudaMemcpy(&mesh->noTotalTriangles, noTriangles_device, sizeof(unsigned int), cudaMemcpyDeviceToHost));
@@ -111,7 +149,7 @@ __global__ void findAllocateBlocks(Vector4s *visibleBlockGlobalPos, const TMulti
 
 template<class TMultiVoxel, class TMultiIndex>
 __global__ void meshScene_device(ITMMesh::Triangle *triangles, unsigned int *noTriangles_device, float factor, int noTotalEntries,
-	int noMaxTriangles, const Vector4s *visibleBlockGlobalPos, const TMultiVoxel *localVBAs, const TMultiIndex *hashTables)
+	int noMaxTriangles, const Vector4s *visibleBlockGlobalPos, const TMultiVoxel *localVBAs, const TMultiIndex *hashTables, int* sysnet_calls, clock_t* sysnet_clocks)
 {
 	const Vector4s globalPos_4s = visibleBlockGlobalPos[blockIdx.x + gridDim.x * blockIdx.y + blockIdx.z * SDF_LOCAL_BLOCK_NUM];
 
@@ -120,7 +158,7 @@ __global__ void meshScene_device(ITMMesh::Triangle *triangles, unsigned int *noT
 	Vector3i globalPos = Vector3i(globalPos_4s.x, globalPos_4s.y, globalPos_4s.z) * SDF_BLOCK_SIZE;
 
 	Vector3f vertList[12];
-	int cubeIndex = buildVertListMulti(vertList, globalPos, Vector3i(threadIdx.x, threadIdx.y, threadIdx.z), localVBAs, hashTables, blockIdx.z);
+	int cubeIndex = buildVertListMulti(vertList, globalPos, Vector3i(threadIdx.x, threadIdx.y, threadIdx.z), localVBAs, hashTables, blockIdx.z, sysnet_calls, sysnet_clocks);
 
 	if (cubeIndex < 0) return;
 

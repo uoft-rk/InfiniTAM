@@ -38,16 +38,20 @@ namespace ITMLib
 	template<class TVoxel, class TIndex, bool modifyVisibleEntries>
 	__global__ void genericRaycast_device(Vector4f *out_ptsRay, uchar *entriesVisibleType, const TVoxel *voxelData,
 		const typename TIndex::IndexData *voxelIndex, Vector2i imgSize, Matrix4f invM, Vector4f invProjParams,
-		float oneOverVoxelSize, const Vector2f *minmaximg, float mu)
+		float oneOverVoxelSize, const Vector2f *minmaximg, float mu, int* sysnet_calls, clock_t* sysnet_clocks)
 	{
 		int x = (threadIdx.x + blockIdx.x * blockDim.x), y = (threadIdx.y + blockIdx.y * blockDim.y);
+		int i = y * (blockDim.x * gridDim.x) + x;
+
+		int* sysnet_call = sysnet_calls + i;
+		clock_t* sysnet_clock = sysnet_clocks + i;
 
 		if (x >= imgSize.x || y >= imgSize.y) return;
 
 		int locId = x + y * imgSize.x;
 		int locId2 = (int)floor((float)x / minmaximg_subsample) + (int)floor((float)y / minmaximg_subsample) * imgSize.x;
 
-		castRay<TVoxel, TIndex, modifyVisibleEntries>(out_ptsRay[locId], entriesVisibleType, x, y, voxelData, voxelIndex, invM, invProjParams, oneOverVoxelSize, mu, minmaximg[locId2]);
+		castRay<TVoxel, TIndex, modifyVisibleEntries>(out_ptsRay[locId], entriesVisibleType, x, y, voxelData, voxelIndex, invM, invProjParams, oneOverVoxelSize, mu, minmaximg[locId2], sysnet_call, sysnet_clock);
 	}
 
 	template<class TVoxel, class TIndex, bool modifyVisibleEntries>
@@ -55,6 +59,10 @@ namespace ITMLib
 		const typename TIndex::IndexData *voxelIndex, Vector2i imgSize, Matrix4f invM, Vector4f invProjParams, float oneOverVoxelSize,
 		int *fwdProjMissingPoints, int noMissingPoints, const Vector2f *minmaximg, float mu)
 	{
+		clock_t sysnet_clk;
+		clock_t* sysnet_clock = &sysnet_clk;
+		int sysnet_cls;
+		int* sysnet_calls = &sysnet_cls;
 		int pointId = threadIdx.x + blockIdx.x * blockDim.x;
 
 		if (pointId >= noMissingPoints) return;
@@ -63,7 +71,7 @@ namespace ITMLib
 		int y = locId / imgSize.x, x = locId - y*imgSize.x;
 		int locId2 = (int)floor((float)x / minmaximg_subsample) + (int)floor((float)y / minmaximg_subsample) * imgSize.x;
 
-		castRay<TVoxel, TIndex, modifyVisibleEntries>(forwardProjection[locId], entriesVisibleType, x, y, voxelData, voxelIndex, invM, invProjParams, oneOverVoxelSize, mu, minmaximg[locId2]);
+		castRay<TVoxel, TIndex, modifyVisibleEntries>(forwardProjection[locId], entriesVisibleType, x, y, voxelData, voxelIndex, invM, invProjParams, oneOverVoxelSize, mu, minmaximg[locId2], sysnet_calls, sysnet_clock);
 	}
 
 	template<bool flipNormals>
@@ -109,9 +117,12 @@ namespace ITMLib
 
 	template<class TVoxel, class TIndex>
 	__global__ void renderGrey_device(Vector4u *outRendering, const Vector4f *ptsRay, const TVoxel *voxelData,
-		const typename TIndex::IndexData *voxelIndex, Vector2i imgSize, Vector3f lightSource)
+		const typename TIndex::IndexData *voxelIndex, Vector2i imgSize, Vector3f lightSource, int* sysnet_calls, clock_t* sysnet_clocks)
 	{
 		int x = (threadIdx.x + blockIdx.x * blockDim.x), y = (threadIdx.y + blockIdx.y * blockDim.y);
+		int i = y * (blockDim.x * gridDim.x) + x;
+
+		clock_t* sysnet_clock = sysnet_clocks + i;
 
 		if (x >= imgSize.x || y >= imgSize.y) return;
 
@@ -119,14 +130,17 @@ namespace ITMLib
 
 		Vector4f ptRay = ptsRay[locId];
 
-		processPixelGrey<TVoxel, TIndex>(outRendering[locId], ptRay.toVector3(), ptRay.w > 0, voxelData, voxelIndex, lightSource);
+		processPixelGrey<TVoxel, TIndex>(outRendering[locId], ptRay.toVector3(), ptRay.w > 0, voxelData, voxelIndex, lightSource, sysnet_calls, sysnet_clock);
 	}
 
 	template<class TVoxel, class TIndex>
 	__global__ void renderColourFromNormal_device(Vector4u *outRendering, const Vector4f *ptsRay, const TVoxel *voxelData,
-		const typename TIndex::IndexData *voxelIndex, Vector2i imgSize, Vector3f lightSource)
+		const typename TIndex::IndexData *voxelIndex, Vector2i imgSize, Vector3f lightSource, int* sysnet_calls, clock_t* sysnet_clocks)
 	{
 		int x = (threadIdx.x + blockIdx.x * blockDim.x), y = (threadIdx.y + blockIdx.y * blockDim.y);
+		int i = y * (blockDim.x * gridDim.x) + x;
+
+		clock_t* sysnet_clock = sysnet_clocks + i;
 
 		if (x >= imgSize.x || y >= imgSize.y) return;
 
@@ -134,14 +148,17 @@ namespace ITMLib
 
 		Vector4f ptRay = ptsRay[locId];
 
-		processPixelNormal<TVoxel, TIndex>(outRendering[locId], ptRay.toVector3(), ptRay.w > 0, voxelData, voxelIndex, lightSource);
+		processPixelNormal<TVoxel, TIndex>(outRendering[locId], ptRay.toVector3(), ptRay.w > 0, voxelData, voxelIndex, lightSource, sysnet_calls, sysnet_clock);
 	}
 
 	template<class TVoxel, class TIndex>
 	__global__ void renderColourFromConfidence_device(Vector4u *outRendering, const Vector4f *ptsRay, const TVoxel *voxelData,
-		const typename TIndex::IndexData *voxelIndex, Vector2i imgSize, Vector3f lightSource)
+		const typename TIndex::IndexData *voxelIndex, Vector2i imgSize, Vector3f lightSource, int* sysnet_calls, clock_t* sysnet_clocks)
 	{
 		int x = (threadIdx.x + blockIdx.x * blockDim.x), y = (threadIdx.y + blockIdx.y * blockDim.y);
+		int i = y * (blockDim.x * gridDim.x) + x;
+
+		clock_t* sysnet_clock = sysnet_clocks + i;
 
 		if (x >= imgSize.x || y >= imgSize.y) return;
 
@@ -149,13 +166,13 @@ namespace ITMLib
 
 		Vector4f ptRay = ptsRay[locId];
 
-		processPixelConfidence<TVoxel, TIndex>(outRendering[locId], ptRay, ptRay.w > 0, voxelData, voxelIndex, lightSource);
+		processPixelConfidence<TVoxel, TIndex>(outRendering[locId], ptRay, ptRay.w > 0, voxelData, voxelIndex, lightSource, sysnet_calls, sysnet_clock);
 	}
 
 	template<class TVoxel, class TIndex>
 	__global__ void renderPointCloud_device(/*Vector4u *outRendering, */Vector4f *locations, Vector4f *colours, uint *noTotalPoints,
 		const Vector4f *ptsRay, const TVoxel *voxelData, const typename TIndex::IndexData *voxelIndex, bool skipPoints,
-		float voxelSize, Vector2i imgSize, Vector3f lightSource)
+		float voxelSize, Vector2i imgSize, Vector3f lightSource, int* sysnet_calls, clock_t* sysnet_clock)
 	{
 		__shared__ bool shouldPrefix;
 		shouldPrefix = false;
@@ -174,7 +191,7 @@ namespace ITMLib
 			point = pointRay.toVector3();
 			foundPoint = pointRay.w > 0;
 
-			computeNormalAndAngle<TVoxel, TIndex>(foundPoint, point, voxelData, voxelIndex, lightSource, outNormal, angle);
+			computeNormalAndAngle<TVoxel, TIndex>(foundPoint, point, voxelData, voxelIndex, lightSource, outNormal, angle, sysnet_calls, sysnet_clock);
 
 			if (skipPoints && ((x % 2 == 0) || (y % 2 == 0))) foundPoint = false;
 

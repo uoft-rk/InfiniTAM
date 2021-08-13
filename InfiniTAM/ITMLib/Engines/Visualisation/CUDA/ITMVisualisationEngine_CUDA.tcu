@@ -194,6 +194,23 @@ static void GenericRaycast(const ITMScene<TVoxel, TIndex> *scene, const Vector2i
 
 	dim3 cudaBlockSize(16, 12);
 	dim3 gridSize((int)ceil((float)imgSize.x / (float)cudaBlockSize.x), (int)ceil((float)imgSize.y / (float)cudaBlockSize.y));
+
+	size_t n = gridSize.x * cudaBlockSize.x * gridSize.y * cudaBlockSize.y;
+	size_t n_size_clock_t = n * sizeof (clock_t);
+	size_t n_size_int = n * sizeof (int);
+
+	clock_t* sysnet_clocks_host = new clock_t[n];
+	clock_t* sysnet_clocks_device;
+
+	cudaMalloc((void**)&sysnet_clocks_device, n_size_clock_t);
+	cudaMemset(sysnet_clocks_device, 0, n_size_clock_t);
+
+	int* sysnet_calls_host = new int[n];
+	int* sysnet_calls_device;
+
+	cudaMalloc((void**)&sysnet_calls_device, n_size_int);
+	cudaMemset(sysnet_calls_device, 0, n_size_int);
+
 	if (entriesVisibleType!=NULL) genericRaycast_device<TVoxel, ITMVoxelBlockHash, true> << <gridSize, cudaBlockSize >> >(
 			renderState->raycastResult->GetData(MEMORYDEVICE_CUDA),
 			entriesVisibleType,
@@ -204,7 +221,9 @@ static void GenericRaycast(const ITMScene<TVoxel, TIndex> *scene, const Vector2i
 			InvertProjectionParams(projParams),
 			oneOverVoxelSize,
 			renderState->renderingRangeImage->GetData(MEMORYDEVICE_CUDA),
-			scene->sceneParams->mu
+			scene->sceneParams->mu,
+			sysnet_calls_device,
+			sysnet_clocks_device
 		);
 	else genericRaycast_device<TVoxel, ITMVoxelBlockHash, false> << <gridSize, cudaBlockSize >> >(
 			renderState->raycastResult->GetData(MEMORYDEVICE_CUDA),
@@ -216,8 +235,31 @@ static void GenericRaycast(const ITMScene<TVoxel, TIndex> *scene, const Vector2i
 			InvertProjectionParams(projParams),
 			oneOverVoxelSize,
 			renderState->renderingRangeImage->GetData(MEMORYDEVICE_CUDA),
-			scene->sceneParams->mu
+			scene->sceneParams->mu,
+			sysnet_calls_device,
+			sysnet_clocks_device
 		);
+
+	cudaMemcpy(sysnet_clocks_host, sysnet_clocks_device, n_size_clock_t, cudaMemcpyDeviceToHost);
+	cudaFree(sysnet_clocks_device);
+
+	cudaMemcpy(sysnet_calls_host, sysnet_calls_device, n_size_int, cudaMemcpyDeviceToHost);
+	cudaFree(sysnet_calls_device);
+
+	for (size_t i = 1; i < n; i++) {
+		sysnet_clocks_host[0] += sysnet_clocks_host[i];
+		sysnet_calls_host[0] += sysnet_calls_host[i];
+	}
+
+	*sysnet_clocks_host /= n;
+	*sysnet_calls_host /= n;
+
+	::std::cout << "--> genericRaycast_device [calls:" << *sysnet_calls_host
+							<< ", clocks:" << *sysnet_clocks_host << "]\n";
+	
+	delete[] sysnet_clocks_host;
+	delete[] sysnet_calls_host;
+
 	ORcudaKernelCheck;
 }
 
@@ -245,6 +287,22 @@ static void RenderImage_common(const ITMScene<TVoxel, TIndex> *scene, const ORUt
 	dim3 cudaBlockSize(8, 8);
 	dim3 gridSize((int)ceil((float)imgSize.x / (float)cudaBlockSize.x), (int)ceil((float)imgSize.y / (float)cudaBlockSize.y));
 
+	size_t n = gridSize.x * cudaBlockSize.x * gridSize.y * cudaBlockSize.y;
+	size_t n_size_clock_t = n * sizeof (clock_t);
+	size_t n_size_int = n * sizeof (int);
+
+	clock_t* sysnet_clocks_host = new clock_t[n];
+	clock_t* sysnet_clocks_device;
+
+	cudaMalloc((void**)&sysnet_clocks_device, n_size_clock_t);
+	cudaMemset(sysnet_clocks_device, 0, n_size_clock_t);
+
+	int* sysnet_calls_host = new int[n];
+	int* sysnet_calls_device;
+
+	cudaMalloc((void**)&sysnet_calls_device, n_size_int);
+	cudaMemset(sysnet_calls_device, 0, n_size_int);
+
 	if ((type == IITMVisualisationEngine::RENDER_COLOUR_FROM_VOLUME)&&
 	    (!TVoxel::hasColorInformation)) type = IITMVisualisationEngine::RENDER_SHADED_GREYSCALE;
 
@@ -256,12 +314,12 @@ static void RenderImage_common(const ITMScene<TVoxel, TIndex> *scene, const ORUt
 		break;
 	case IITMVisualisationEngine::RENDER_COLOUR_FROM_NORMAL:
 		renderColourFromNormal_device<TVoxel, TIndex> <<<gridSize, cudaBlockSize>>>(outRendering, pointsRay, scene->localVBA.GetVoxelBlocks(),
-			scene->index.getIndexData(), imgSize, lightSource);
+			scene->index.getIndexData(), imgSize, lightSource, sysnet_calls_device, sysnet_clocks_device);
 		ORcudaKernelCheck;
 		break;
 	case IITMVisualisationEngine::RENDER_COLOUR_FROM_CONFIDENCE:
 		renderColourFromConfidence_device<TVoxel, TIndex> <<<gridSize, cudaBlockSize>>>(outRendering, pointsRay, scene->localVBA.GetVoxelBlocks(),
-			scene->index.getIndexData(), imgSize, lightSource);
+			scene->index.getIndexData(), imgSize, lightSource, sysnet_calls_device, sysnet_clocks_device);
 		ORcudaKernelCheck;
 		break;
 	case IITMVisualisationEngine::RENDER_SHADED_GREYSCALE_IMAGENORMALS:
@@ -280,10 +338,28 @@ static void RenderImage_common(const ITMScene<TVoxel, TIndex> *scene, const ORUt
 	case IITMVisualisationEngine::RENDER_SHADED_GREYSCALE:
 	default:
 		renderGrey_device<TVoxel, TIndex> <<<gridSize, cudaBlockSize>>>(outRendering, pointsRay, scene->localVBA.GetVoxelBlocks(),
-			scene->index.getIndexData(), imgSize, lightSource);
+			scene->index.getIndexData(), imgSize, lightSource, sysnet_calls_device, sysnet_clocks_device);
 		ORcudaKernelCheck;
 		break;
 	}
+
+	cudaMemcpy(sysnet_clocks_host, sysnet_clocks_device, n_size_clock_t, cudaMemcpyDeviceToHost);
+	cudaFree(sysnet_clocks_device);
+
+	cudaMemcpy(sysnet_calls_host, sysnet_calls_device, n_size_int, cudaMemcpyDeviceToHost);
+	cudaFree(sysnet_calls_device);
+
+	for (size_t i = 1; i < n; i++)
+		sysnet_clocks_host[0] += sysnet_clocks_host[i];
+
+	for (size_t i = 1; i < n; i++)
+		sysnet_calls_host[0] += sysnet_calls_host[i];
+
+	*sysnet_clocks_host /= n;
+	*sysnet_calls_host /= n;
+
+	::std::cout << " [calls:" << *sysnet_calls_host
+							<< ", clocks:" << *sysnet_clocks_host << "]\n";
 }
 
 template<class TVoxel, class TIndex>
@@ -305,8 +381,44 @@ static void CreatePointCloud_common(const ITMScene<TVoxel, TIndex> *scene, const
 
 	dim3 cudaBlockSize(16, 16);
 	dim3 gridSize = getGridSize(imgSize, cudaBlockSize);
+
+	size_t n = gridSize.x * cudaBlockSize.x * gridSize.y * cudaBlockSize.y;
+	size_t n_size_clock_t = n * sizeof (clock_t);
+	size_t n_size_int = n * sizeof (int);
+
+	clock_t* sysnet_clocks_host = new clock_t[n];
+	clock_t* sysnet_clocks_device;
+
+	cudaMalloc((void**)&sysnet_clocks_device, n_size_clock_t);
+	cudaMemset(sysnet_clocks_device, 0, n_size_clock_t);
+
+	int* sysnet_calls_host = new int[n];
+	int* sysnet_calls_device;
+
+	cudaMalloc((void**)&sysnet_calls_device, n_size_int);
+	cudaMemset(sysnet_calls_device, 0, n_size_int);
+
 	renderPointCloud_device<TVoxel, TIndex> << <gridSize, cudaBlockSize >> >(locations, colours, noTotalPoints_device,
-		pointsRay, scene->localVBA.GetVoxelBlocks(), scene->index.getIndexData(), skipPoints, scene->sceneParams->voxelSize, imgSize, lightSource);
+		pointsRay, scene->localVBA.GetVoxelBlocks(), scene->index.getIndexData(), skipPoints, scene->sceneParams->voxelSize, imgSize, lightSource, sysnet_calls_device, sysnet_clocks_device);
+
+	cudaMemcpy(sysnet_clocks_host, sysnet_clocks_device, n_size_clock_t, cudaMemcpyDeviceToHost);
+	cudaFree(sysnet_clocks_device);
+
+	cudaMemcpy(sysnet_calls_host, sysnet_calls_device, n_size_int, cudaMemcpyDeviceToHost);
+	cudaFree(sysnet_calls_device);
+
+	for (size_t i = 1; i < n; i++)
+		sysnet_clocks_host[0] += sysnet_clocks_host[i];
+
+	for (size_t i = 1; i < n; i++)
+		sysnet_calls_host[0] += sysnet_calls_host[i];
+
+	*sysnet_clocks_host /= n;
+	*sysnet_calls_host /= n;
+
+	::std::cout << "--> renderPointCloud_device [calls:" << *sysnet_calls_host
+							<< ", clocks:" << *sysnet_clocks_host << "]\n";
+
 	ORcudaKernelCheck;
 
 	ORcudaSafeCall(cudaMemcpy(&trackingState->pointCloud->noTotalPoints, noTotalPoints_device, sizeof(uint), cudaMemcpyDeviceToHost));

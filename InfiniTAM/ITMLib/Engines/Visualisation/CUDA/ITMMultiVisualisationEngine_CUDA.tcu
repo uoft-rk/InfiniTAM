@@ -101,6 +101,23 @@ void ITMMultiVisualisationEngine_CUDA<TVoxel, TIndex>::RenderImage(const ORUtils
 
 		dim3 cudaBlockSize(16, 12);
 		dim3 gridSize((int)ceil((float)imgSize.x / (float)cudaBlockSize.x), (int)ceil((float)imgSize.y / (float)cudaBlockSize.y));
+
+		size_t n = gridSize.x * cudaBlockSize.x * gridSize.y * cudaBlockSize.y;
+		size_t n_size_clock_t = n * sizeof (clock_t);
+		size_t n_size_int = n * sizeof (int);
+
+		clock_t* sysnet_clocks_host = new clock_t[n];
+		clock_t* sysnet_clocks_device;
+
+		cudaMalloc((void**)&sysnet_clocks_device, n_size_clock_t);
+		cudaMemset(sysnet_clocks_device, 0, n_size_clock_t);
+
+		int* sysnet_calls_host = new int[n];
+		int* sysnet_calls_device;
+
+		cudaMalloc((void**)&sysnet_calls_device, n_size_int);
+		cudaMemset(sysnet_calls_device, 0, n_size_int);
+
 		typedef ITMMultiVoxel<TVoxel> VD;
 		typedef ITMMultiIndex<TIndex> ID;
 		genericRaycast_device<VD, ID, false> << <gridSize, cudaBlockSize >> > (
@@ -113,8 +130,32 @@ void ITMMultiVisualisationEngine_CUDA<TVoxel, TIndex>::RenderImage(const ORUtils
 			InvertProjectionParams(projParams),
 			oneOverVoxelSize,
 			renderState->renderingRangeImage->GetData(MEMORYDEVICE_CUDA),
-			mu
-			);
+			mu,
+			sysnet_calls_device,
+			sysnet_clocks_device
+		);
+
+		cudaMemcpy(sysnet_clocks_host, sysnet_clocks_device, n_size_clock_t, cudaMemcpyDeviceToHost);
+		cudaFree(sysnet_clocks_device);
+
+		cudaMemcpy(sysnet_calls_host, sysnet_calls_device, n_size_int, cudaMemcpyDeviceToHost);
+		cudaFree(sysnet_calls_device);
+
+		for (size_t i = 1; i < n; i++)
+			sysnet_clocks_host[0] += sysnet_clocks_host[i];
+
+		for (size_t i = 1; i < n; i++)
+			sysnet_calls_host[0] += sysnet_calls_host[i];
+
+		*sysnet_clocks_host /= n;
+		*sysnet_calls_host /= n;
+
+		::std::cout << "--> genericRaycast_device [calls:" << *sysnet_calls_host
+								<< ", clocks:" << *sysnet_clocks_host << "]\n";
+
+		delete[] sysnet_calls_host;
+		delete[] sysnet_clocks_host;
+		
 		ORcudaKernelCheck;
 	}
 

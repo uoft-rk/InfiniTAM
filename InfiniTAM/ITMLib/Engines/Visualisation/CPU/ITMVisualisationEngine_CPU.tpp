@@ -207,7 +207,9 @@ static void GenericRaycast(const ITMScene<TVoxel, TIndex> *scene, const Vector2i
 				InvertProjectionParams(projParams),
 				oneOverVoxelSize,
 				mu,
-				minmaximg[locId2]
+				minmaximg[locId2],
+				NULL,
+				NULL
 			);
 		else castRay<TVoxel, TIndex, false>(
 				pointsRay[locId],
@@ -219,7 +221,9 @@ static void GenericRaycast(const ITMScene<TVoxel, TIndex> *scene, const Vector2i
 				InvertProjectionParams(projParams),
 				oneOverVoxelSize,
 				mu,
-				minmaximg[locId2]
+				minmaximg[locId2],
+				NULL,
+				NULL
 			);
 	}
 }
@@ -274,7 +278,7 @@ static void RenderImage_common(const ITMScene<TVoxel,TIndex> *scene, const ORUti
 		for (int locId = 0; locId < imgSize.x * imgSize.y; locId++)
 		{
 			Vector4f ptRay = pointsRay[locId];
-			processPixelNormal<TVoxel, TIndex>(outRendering[locId], ptRay.toVector3(), ptRay.w > 0, voxelData, voxelIndex, lightSource);
+			processPixelNormal<TVoxel, TIndex>(outRendering[locId], ptRay.toVector3(), ptRay.w > 0, voxelData, voxelIndex, lightSource, NULL, NULL);
 		}
 		break;
 	case IITMVisualisationEngine::RENDER_COLOUR_FROM_CONFIDENCE:
@@ -284,7 +288,7 @@ static void RenderImage_common(const ITMScene<TVoxel,TIndex> *scene, const ORUti
 		for (int locId = 0; locId < imgSize.x * imgSize.y; locId++)
 		{
 			Vector4f ptRay = pointsRay[locId];
-			processPixelConfidence<TVoxel, TIndex>(outRendering[locId], ptRay, ptRay.w > 0, voxelData, voxelIndex, lightSource);
+			processPixelConfidence<TVoxel, TIndex>(outRendering[locId], ptRay, ptRay.w > 0, voxelData, voxelIndex, lightSource, NULL, NULL);
 		}
 		break;
 	case IITMVisualisationEngine::RENDER_SHADED_GREYSCALE_IMAGENORMALS:
@@ -314,7 +318,7 @@ static void RenderImage_common(const ITMScene<TVoxel,TIndex> *scene, const ORUti
 		for (int locId = 0; locId < imgSize.x * imgSize.y; locId++)
 		{
 			Vector4f ptRay = pointsRay[locId];
-			processPixelGrey<TVoxel, TIndex>(outRendering[locId], ptRay.toVector3(), ptRay.w > 0, voxelData, voxelIndex, lightSource);
+			processPixelGrey<TVoxel, TIndex>(outRendering[locId], ptRay.toVector3(), ptRay.w > 0, voxelData, voxelIndex, lightSource, NULL, NULL);
 		}
 	}
 }
@@ -434,7 +438,7 @@ static void ForwardRender_common(const ITMScene<TVoxel, TIndex> *scene, const IT
 		int locId2 = (int)floor((float)x / minmaximg_subsample) + (int)floor((float)y / minmaximg_subsample) * imgSize.x;
 
 		castRay<TVoxel, TIndex, false>(forwardProjection[locId], NULL, x, y, voxelData, voxelIndex, invM, invProjParams,
-			1.0f / scene->sceneParams->voxelSize, scene->sceneParams->mu, minmaximg[locId2]);
+			1.0f / scene->sceneParams->voxelSize, scene->sceneParams->mu, minmaximg[locId2], NULL, NULL);
 	}
 }
 
@@ -526,7 +530,7 @@ static int RenderPointCloud(Vector4f *locations, Vector4f *colours, const Vector
 		Vector3f point = pointRay.toVector3();
 		bool foundPoint = pointRay.w > 0;
 
-		computeNormalAndAngle<TVoxel, TIndex>(foundPoint, point, voxelData, voxelIndex, lightSource, outNormal, angle);
+		computeNormalAndAngle<TVoxel, TIndex>(foundPoint, point, voxelData, voxelIndex, lightSource, outNormal, angle, NULL, NULL);
 
 		if (skipPoints && ((x % 2 == 0) || (y % 2 == 0))) foundPoint = false;
 
